@@ -1105,7 +1105,7 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
         <identifier> ':' <?[\s]> <.ws>
         {
             $*LABEL := ~$<identifier>;
-            my $label := $*W.find_symbol(['Label']).new($*LABEL);
+            my $label := $*W.find_symbol(['Label']).new( :name($*LABEL), :match($/) );
             $*W.add_object($label);
             $*W.install_lexical_symbol($*W.cur_lexpad(), $*LABEL, $label);
         }
