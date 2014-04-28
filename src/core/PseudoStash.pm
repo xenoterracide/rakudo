@@ -1,6 +1,29 @@
 my class X::Bind { ... }
 my class X::Caller::NotDynamic { ... }
 
+my class Label {
+    has Str $!name;
+    method new($name) {
+        # XXX register in &?BLOCK.labels
+        my $obj := nqp::create(self);
+        nqp::bindattr($obj, Label, '$!name', $name);
+        $obj
+    }
+    method name() {
+        $!name
+    }
+    # XXX method leave(@args)
+    # XXX method goto
+    # XXX method next
+    method last() {
+        say $!name ~ '.last called';
+        my Mu $ex   := nqp::newexception();
+        nqp::setpayload($ex, self);
+        nqp::setextype($ex, nqp::const::CONTROL_LAST + nqp::const::CONTROL_LABELED);
+        nqp::throw($ex);
+    }
+}
+
 my class PseudoStash is EnumMap {
     has Mu $!ctx;
     has int $!mode;

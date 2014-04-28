@@ -1,5 +1,6 @@
 my class X::Eval::NoSuchLang { ... }
 my class PseudoStash { ... }
+my class Label { ... }
 
 my &THROW :=
     -> | {
@@ -49,11 +50,21 @@ my &take := -> | {
     $parcel
 };
 
-my &last := -> | { 
-    my $parcel := 
-        &RETURN-PARCEL(nqp::p6parcel(nqp::p6argvmarray(), Nil));
-    THROW(nqp::decont($parcel), 
-          nqp::const::CONTROL_LAST) 
+my &last := -> | {
+    my Mu $args := nqp::p6argvmarray();
+
+    if nqp::istype($args, Label) {
+        say 'nqp::istype($args, Label)';
+        $args.last()
+    }
+    elsif nqp::islist($args) && nqp::istype(nqp::atpos($args, 0), Label) {
+        say 'nqp::islist($args) && nqp::istype(nqp::atpos($args, 0), Label)';
+        nqp::atpos($args, 0).last()
+    }
+    else {
+        my $parcel := nqp::decont(&RETURN-PARCEL(nqp::p6parcel($args, Nil)));
+        THROW($parcel, nqp::const::CONTROL_LAST)
+    }
 };
 
 my &next := -> | { 
