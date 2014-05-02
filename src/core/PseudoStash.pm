@@ -34,7 +34,7 @@ my class Label {
             !! ("", "", "", "");
         my $eject = $*OS eq 'MSWin32' ?? "<HERE>" !! "\x[23CF]";
 
-        "Label<$!name>(at $file:$line, '$green$left$yellow$eject$red$!name:$green$right$clear')"
+        "Label<$!name>(at $file:$line, '$green$left$yellow$eject$red$!name: $green$right$clear')"
     }
     method next() {
         my Mu $ex := nqp::newexception();
@@ -42,10 +42,10 @@ my class Label {
 #?if moar
         nqp::setextype($ex, nqp::const::CONTROL_NEXT + nqp::const::CONTROL_LABELED);
 #?endif
-#?if moar
+#?if parrot
         nqp::setextype($ex, 512); # XXX create nqp::const::CONTROL_LOOP_NEXT_LABELED?
 #?endif
-#?if moar
+#?if jvm
         nqp::die("loop labels on JVM NYI");
 #?endif
         nqp::throw($ex);
