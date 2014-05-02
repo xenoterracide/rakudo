@@ -89,8 +89,8 @@ my class Any { # declared in BOOTSTRAP
     method lol()  {
         MapIter.new(self.list, { .item }, Mu).list
     }
-    method map($block) is rw {
-        MapIter.new(self, $block, Bool::True).list
+    method map($block, :$label) is rw {
+        MapIter.new(self, $block, Bool::True, :$label).list
     }
     method flatmap($block) is rw { flatmap($block, self) }
     method duckmap($block) is rw { duckmap($block, self) }

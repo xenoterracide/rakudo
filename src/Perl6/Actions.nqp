@@ -1134,14 +1134,14 @@ class Perl6::Actions is HLL::Actions does STDActions {
 
     method statement_control:sym<for>($/) {
         my $xblock := $<xblock>.ast;
-        #~ if $*LABEL {
-            #~ $loop.push(QAST::WVal.new( :value($*W.find_sym([$*LABEL])), :named('label') ));
-        #~ }
         my $past := QAST::Op.new(
                         :op<callmethod>, :name<map>, :node($/),
                         QAST::Op.new(:name('&infix:<,>'), :op('call'), $xblock[0]),
                         block_closure($xblock[1])
         );
+        if $*LABEL {
+            $past.push(QAST::WVal.new( :value($*W.find_symbol([$*LABEL])), :named('label') ));
+        }
         $past := QAST::Want.new(
             QAST::Op.new( :op<callmethod>, :name<eager>, $past ),
             'v', QAST::Op.new( :op<callmethod>, :name<sink>, $past ));

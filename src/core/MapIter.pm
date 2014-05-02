@@ -5,20 +5,22 @@ my class MapIter is Iterator {
     has $!block;               # the block we're applying
     has $!first;               # Is this the first iterator in the sequence?
     has Mu $!items;            # reified items we haven't consumed yet
+    has Mu $!label;            # The label that might be attached to us
 
-    method new($list, $block, Mu $flattens = Bool::True) { 
+    method new($list, $block, Mu $flattens = Bool::True, :$label) { 
         my $new := nqp::create(self);
         $new.BUILD(nqp::p6listiter(nqp::list(nqp::decont($list)), $new), 
-                   $block, $flattens, True);
+                   $block, $flattens, True, :$label);
         $new;
     }
 
-    method BUILD(Mu \listiter, \block, Mu \flattens, $first = False) { 
+    method BUILD(Mu \listiter, \block, Mu \flattens, $first = False, :$label) { 
         nqp::bindattr(listiter, ListIter, '$!list', self) if nqp::isconcrete(listiter);
         $!listiter := listiter; 
         $!block = block; 
         $!first = $first;
         $!flattens = flattens;
+        $!label := $label;
         self 
     }
 
@@ -125,6 +127,7 @@ my class MapIter is Iterator {
             my int $state = 1;
             my int $itmp;
             my Mu $items := $!items;
+            my Mu $label := $!label;
             my Mu $args := nqp::list();
             my Mu $arg;
             
@@ -132,9 +135,34 @@ my class MapIter is Iterator {
             # the backing array at $count).
             nqp::setelems($rpa, $count min 1024) unless $sink;
             nqp::setelems($rpa, 0);
-            
+
             if $argc == 1 && !$NEXT {
                 # Fast path case: only 1 argument for each block, no NEXT phaser.
+                $!label ??
+                nqp::while(($state && nqp::islt_i(nqp::elems($rpa), $count)), nqp::handle(
+                    nqp::stmts(
+                        nqp::if(nqp::iseq_i($state, 1), nqp::stmts(
+                            nqp::unless(nqp::elems($items), nqp::stmts(
+                                nqp::if($!listiter, $!listiter.reify(1))
+                            )),
+                            nqp::if($items, 
+                                nqp::stmts(($arg := nqp::shift($items)), $state = 2),
+                                $state = 0)
+                        )),
+                        nqp::if(nqp::iseq_i($state, 2), nqp::stmts(
+                            ($sink ?? $block($arg) !! nqp::push($rpa, $block($arg))),
+                            $state = 1
+                        ))
+                    ),
+                    'LABELED', $label,
+                    'LAST', nqp::stmts(
+                        ($!items := Any),
+                        ($!listiter := Any),
+                        ($state = 0)
+                    ),
+                    'REDO', $state = 2,
+                    'NEXT', $state = 1
+                )) !!
                 nqp::while(($state && nqp::islt_i(nqp::elems($rpa), $count)), nqp::handle(
                     nqp::stmts(
                         nqp::if(nqp::iseq_i($state, 1), nqp::stmts(
@@ -160,6 +188,39 @@ my class MapIter is Iterator {
                 ));
             }
             else {
+                $!label ??
+                nqp::while(($state && nqp::islt_i(nqp::elems($rpa), $count)), nqp::handle(
+                    nqp::stmts(
+                        nqp::if(nqp::iseq_i($state, 1), nqp::stmts(
+                            ($itmp = nqp::elems($items)),
+                            nqp::unless($itmp >= $argc, nqp::stmts(
+                                ($itmp = $argc - $itmp),
+                                nqp::if($!listiter, $!listiter.reify($itmp))
+                            )),
+                            nqp::setelems($args, 0),
+                            nqp::p6shiftpush($args, $items, $argc),
+                            nqp::if($args, $state = 2, $state = 0)
+                        )),
+                        nqp::if(nqp::iseq_i($state, 2), nqp::stmts(
+                            ($sink
+                                ?? nqp::p6invokeflat($block, $args)
+                                !! nqp::push($rpa, nqp::p6invokeflat($block, $args))),
+                            $state = 3
+                        )),
+                        nqp::if(nqp::iseq_i($state, 3), nqp::stmts(
+                            nqp::if($NEXT, $block.fire_phasers('NEXT')),
+                            ($state = 1)
+                        ))
+                    ),
+                    'LABELED', $label,
+                    'LAST', nqp::stmts(
+                        ($!items := Any),
+                        ($!listiter := Any),
+                        ($state = 0)
+                    ),
+                    'REDO', $state = 2,
+                    'NEXT', $state = 3
+                )) !!
                 nqp::while(($state && nqp::islt_i(nqp::elems($rpa), $count)), nqp::handle(
                     nqp::stmts(
                         nqp::if(nqp::iseq_i($state, 1), nqp::stmts(
