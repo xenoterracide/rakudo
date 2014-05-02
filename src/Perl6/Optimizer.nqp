@@ -29,6 +29,10 @@ my class Symbols {
     has $!Mu;
     has $!Any;
     has $!PseudoStash;
+    has $!Routine;
+
+    # Top routine, for faking it when optimizing post-inline.
+    has $!fake_top_routine;
 
     # Constructs a new instance of the symbols handling class.
     method new($compunit) {
@@ -48,6 +52,7 @@ my class Symbols {
         $!Mu          := self.find_lexical('Mu');
         $!Any         := self.find_lexical('Any');
         $!PseudoStash := self.find_lexical('PseudoStash');
+        $!Routine     := self.find_lexical('Routine');
         nqp::pop(@!block_stack);
     }
 
@@ -61,7 +66,24 @@ my class Symbols {
     method top_block() {
         @!block_stack[+@!block_stack - 1]
     }
-
+    method top_routine() {
+        return $!fake_top_routine if $!fake_top_routine;
+        my int $i := nqp::elems(@!block_stack);
+        while $i-- {
+            my $co := @!block_stack[$i]<code_object>;
+            if nqp::istype($co, $!Routine) {
+                return $co;
+            }
+        }
+        NQPMu
+    }
+    method faking_top_routine($fake, $run) {
+        $!fake_top_routine := $fake;
+        my $result := $run();
+        $!fake_top_routine := NQPMu;
+        $result;
+    }
+    
     # Accessors for interesting symbols/scopes.
     method GLOBALish()   { $!GLOBALish }
     method UNIT()        { $!UNIT }
@@ -466,11 +488,13 @@ my class BlockVarOptimizer {
         if nqp::existskey(%!decls, '$/') {
             if !nqp::existskey(%!usages_flat, '$/') && !nqp::existskey(%!usages_inner, '$/') {
                 %kill<$/> := 1;
+                nqp::deletekey(%!decls, '$/');
             }
         }
         if nqp::existskey(%!decls, '$!') {
             if !nqp::existskey(%!usages_flat, '$!') && !nqp::existskey(%!usages_inner, '$!') {
                 %kill<$!> := 1;
+                nqp::deletekey(%!decls, '$!');
             }
         }
         if nqp::existskey(%!decls, '$_') {
@@ -479,6 +503,7 @@ my class BlockVarOptimizer {
                 if !nqp::existskey(%!usages_flat, '$_') && !nqp::existskey(%!usages_inner, '$_') {
                     if !@!getlexouter_binds {
                         %kill<$_> := 1;
+                        nqp::deletekey(%!decls, '$_');
                     }
                     elsif nqp::elems(@!getlexouter_binds) == 1 {
                         my $glob := @!getlexouter_binds[0];
@@ -486,6 +511,7 @@ my class BlockVarOptimizer {
                             $glob.op('null');
                             $glob.shift(); $glob.shift();
                             %kill<$_> := 1;
+                            nqp::deletekey(%!decls, '$_');
                         }
                     }
                 }
@@ -804,7 +830,8 @@ class Perl6::Optimizer {
             if +@sigsyms == 0 {
                 if $!level >= 3 {
                     my $outer := $!symbols.top_block;
-                    $result := self.inline_immediate_block($block, $outer);
+                    $result := self.inline_immediate_block($block, $outer,
+                        nqp::existskey($vars_info.get_decls(), '$_'));
                 }
             }
         }
@@ -814,6 +841,18 @@ class Perl6::Optimizer {
             if @!block_var_stack;
 
         $result
+    }
+
+    # Gets the last statement if the thing passed as a QAST::Stmts or a
+    # QAST::Stmt. Works recursively. Otherwise returns what was passed.
+    sub get_last_stmt($op) {
+        if nqp::istype($op, QAST::Stmt) || nqp::istype($op, QAST::Stmts) {
+            my int $resultchild := $op.resultchild // +@($op) - 1;
+            $resultchild >= 0 ?? get_last_stmt($op[$resultchild]) !! $op
+        }
+        else {
+            $op
+        }
     }
 
     # Called when we encounter a QAST::Op in the tree. Produces either
@@ -862,9 +901,55 @@ class Perl6::Optimizer {
             }
         }
 
+        # May be able to eliminate some decontrv operations.
+        if $optype eq 'p6decontrv' {
+            # Natives don't need it.
+            my $value := $op[1];
+            return $value if nqp::objprimspec($value.returns);
+
+            # Boolifications don't need it, nor do _I ops.
+            my $last_stmt := get_last_stmt($value);
+            if nqp::istype($last_stmt, QAST::Op) {
+                my str $op := $last_stmt.op;
+                if $op eq 'p6bool' || nqp::substr($op, nqp::chars($op) - 1, 1) eq 'I' {
+                    return $value;
+                }
+            }
+        }
+
+        # Also some return type checks.
+        elsif $optype eq 'p6typecheckrv' {
+            try {
+                my $rettype        := $!symbols.top_routine.returns;
+                my int $rettype_ps := nqp::objprimspec($rettype);
+                if $rettype =:= $!symbols.Mu {
+                    return $op[0];
+                }
+                elsif $rettype_ps && $rettype_ps == nqp::objprimspec($op[0].returns) {
+                    return $op[0];
+                }
+            }
+        }
+
+        # Some ops have first boolean arg, and we may be able to get rid of
+        # a p6bool if there's already an integer result behind it.
+        elsif $optype eq 'if' || $optype eq 'unless' || $optype eq 'while' || $optype eq 'until' {
+            my $update := $op;
+            my $target := $op[0];
+            while (nqp::istype($target, QAST::Stmt) || nqp::istype($target, QAST::Stmts)) && +@($target) == 1 {
+                $update := $target;
+                $target := $target[0];
+            }
+            if nqp::istype($target, QAST::Op) && $target.op eq 'p6bool' {
+                if nqp::objprimspec($target[0].returns) == nqp::objprimspec(int) {
+                    $update[0] := $target[0];
+                }
+            }
+        }
+
         # Calls are especially interesting as we may wish to do some
         # kind of inlining.
-        if $optype eq 'call' && $op.name ne '' {
+        elsif $optype eq 'call' && $op.name ne '' {
             # See if we can find the thing we're going to call.
             my $obj;
             my int $found := 0;
@@ -1252,11 +1337,12 @@ class Perl6::Optimizer {
                 elsif nqp::istype($visit, QAST::Block) {
                     $node[$i] := self.visit_block($visit);
                 }
-                elsif nqp::istype($visit, QAST::Stmts) {
-                    self.visit_children($visit, :resultchild($visit.resultchild // +@($visit) - 1));
-                }
-                elsif nqp::istype($visit, QAST::Stmt) {
-                    self.visit_children($visit, :resultchild($visit.resultchild // +@($visit) - 1));
+                elsif nqp::istype($visit, QAST::Stmt) || nqp::istype($visit, QAST::Stmts) {
+                    my int $resultchild := $visit.resultchild // +@($visit) - 1;
+                    if $resultchild >= 0 {
+                        self.visit_children($visit, :$resultchild);
+                        $visit.returns($visit[$resultchild].returns);
+                    }
                 }
                 elsif nqp::istype($visit, QAST::Regex) {
                     self.poison_var_lowering();
@@ -1273,7 +1359,7 @@ class Perl6::Optimizer {
     }
     
     # Inlines an immediate block.
-    method inline_immediate_block($block, $outer) {
+    method inline_immediate_block($block, $outer, $preserve_topic) {
         # Sanity check.
         return $block if +@($block) != 2;
 
@@ -1281,9 +1367,10 @@ class Perl6::Optimizer {
         my $decls := $block.shift;
         my $stmts := $block.shift;
 
-        # Turn block into an "optimized out" stub (deserialization
-        # or fixup will still want it to be there).
-        $block.blocktype('declaration');
+        # Turn block into an "optimized out" stub (deserialization or fixup
+        # will still want it to be there). Marked as "raw" to avoid any kind
+        # of lexical capture/closure happening.
+        $block.blocktype('raw');
         $block[0] := QAST::Op.new( :op('die_s'),
             QAST::SVal.new( :value('INTERNAL ERROR: Execution of block eliminated by optimizer') ) );
         $outer[0].push($block);
@@ -1310,21 +1397,27 @@ class Perl6::Optimizer {
             }
         }
 
-        # Hand back the statements, but be sure to preserve $_ around them.
-        my $pres_topic_name := QAST::Node.unique('pres_topic_');
-        $outer[0].push(QAST::Var.new( :scope('local'), :name($pres_topic_name), :decl('var') ));
-        return QAST::Stmts.new(
-            :resultchild(1),
-            QAST::Op.new( :op('bind'),
-                QAST::Var.new( :name($pres_topic_name), :scope('local') ),
-                QAST::Var.new( :name('$_'), :scope('lexical') )
-            ),
-            $stmts,
-            QAST::Op.new( :op('bind'),
-                QAST::Var.new( :name('$_'), :scope('lexical') ),
-                QAST::Var.new( :name($pres_topic_name), :scope('local') )
-            )
-        );
+        # Hand back the statements, but be sure to preserve $_ around them if
+        # the block uses it.
+        if $preserve_topic {
+            my $pres_topic_name := QAST::Node.unique('pres_topic_');
+            $outer[0].push(QAST::Var.new( :scope('local'), :name($pres_topic_name), :decl('var') ));
+            return QAST::Stmts.new(
+                :resultchild(1),
+                QAST::Op.new( :op('bind'),
+                    QAST::Var.new( :name($pres_topic_name), :scope('local') ),
+                    QAST::Var.new( :name('$_'), :scope('lexical') )
+                ),
+                $stmts,
+                QAST::Op.new( :op('bind'),
+                    QAST::Var.new( :name('$_'), :scope('lexical') ),
+                    QAST::Var.new( :name($pres_topic_name), :scope('local') )
+                )
+            );
+        }
+        else {
+            return $stmts;
+        }
     }
     
     # Inlines a call to a sub.
@@ -1334,17 +1427,26 @@ class Perl6::Optimizer {
             return $call;
         }
         
-        # Bind the arguments to temporaries.
+        # Bind the arguments to temporaries, if they are used more than once.
         my $inlined := QAST::Stmts.new();
         my @subs;
+        my @usages;
+        $code_obj.inline_info.count_inline_placeholder_usages(@usages);
+        my int $idx := 0;
         for $call.list {
-            my $temp_name := QAST::Node.unique('_inline_arg_');
-            my $temp_type := $_.returns;
-            $inlined.push(QAST::Op.new(
-                :op('bind'),
-                QAST::Var.new( :name($temp_name), :scope('local'), :returns($temp_type), :decl('var') ),
-                $_));
-            nqp::push(@subs, QAST::Var.new( :name($temp_name), :scope('local'), :returns($temp_type) ));
+            if @usages[$idx] == 1 {
+                nqp::push(@subs, $_);
+            }
+            else {
+                my $temp_name := QAST::Node.unique('_inline_arg_');
+                my $temp_type := $_.returns;
+                $inlined.push(QAST::Op.new(
+                    :op('bind'),
+                    QAST::Var.new( :name($temp_name), :scope('local'), :returns($temp_type), :decl('var') ),
+                    $_));
+                nqp::push(@subs, QAST::Var.new( :name($temp_name), :scope('local'), :returns($temp_type) ));
+            }
+            $idx++;
         }
         
         # Now do the inlining.
@@ -1353,6 +1455,11 @@ class Perl6::Optimizer {
             $inlined.named($name);
         }
         $inlined.node($call.node);
+
+        # Do an optimzation pass over the inlined code.
+        $!symbols.faking_top_routine($code_obj,
+            { self.visit_children($inlined) });
+
         
         $inlined
     }

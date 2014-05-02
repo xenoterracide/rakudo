@@ -3,7 +3,6 @@
 # be declared outside of Supply.
 
 my class SupplyOperations is repr('Uninstantiable') {
-    my @secret;
 
     # Private versions of the methods to relay events to subscribers, used in
     # implementing various operations.
@@ -37,6 +36,7 @@ my class SupplyOperations is repr('Uninstantiable') {
 
             submethod BUILD(:@!values, :$!scheduler) {}
 
+            method live { False }
             method tap(|c) {
                 my $closed = False;
                 my $sub = self.Supply::tap(|c, closing => { $closed = True });
@@ -64,6 +64,7 @@ my class SupplyOperations is repr('Uninstantiable') {
 
             submethod BUILD(:$!scheduler, :$!interval, :$!delay) {}
 
+            method live { False }
             method tap(|c) {
                 my $cancellation;
                 my $sub = self.Supply::tap(|c, closing => { $cancellation.cancel() });
@@ -80,332 +81,92 @@ my class SupplyOperations is repr('Uninstantiable') {
         IntervalSupply.new(:$interval, :$delay, :$scheduler)
     }
     
-    method flat(Supply $a) {
+    method flat(Supply $source) {
         my class FlatSupply does Supply does PrivatePublishing {
             has $!source;
             
             submethod BUILD(:$!source) { }
             
+            method live { $source.live }
             method tap(|c) {
                 my $source_tap;
-                my $sub = self.Supply::tap(|c, closing => { $source_tap.close() });
+                my $tap = self.Supply::tap(|c, closing => {$source_tap.close});
                 $source_tap = $!source.tap( -> \val {
                       self!more(val.flat)
                   },
                   done => { self!done(); },
                   quit => -> $ex { self!quit($ex) });
-                $sub
+                $tap
             }
         }
-        FlatSupply.new(:source($a))
+        FlatSupply.new(:$source)
     }
 
-    method do($a, &side_effect) {
-        on -> $res {
-            $a => sub (\val) { side_effect(val); $res.more(val) }
-        }
-    }
-
-    method grep(Supply $a, &filter) {
+    method grep(Supply $source, &filter) {
         my class GrepSupply does Supply does PrivatePublishing {
             has $!source;
             has &!filter;
             
             submethod BUILD(:$!source, :&!filter) { }
             
+            method live { $source.live }
             method tap(|c) {
                 my $source_tap;
-                my $sub = self.Supply::tap(|c, closing => { $source_tap.close() });
+                my $tap = self.Supply::tap(|c, closing => {$source_tap.close});
                 $source_tap = $!source.tap( -> \val {
                       if (&!filter(val)) { self!more(val) }
                   },
                   done => { self!done(); },
                   quit => -> $ex { self!quit($ex) }
                 );
-                $sub
+                $tap
             }
         }
-        GrepSupply.new(:source($a), :&filter)
+        GrepSupply.new(:$source, :&filter)
     }
 
-    method uniq(Supply $a, :&as, :&with, :$expires) {
-        on -> $res {
-            $a => do {
-                if $expires {
-                    if &with and &with !=== &[===] {
-                        my @seen;  # really Mu, but doesn't work in settings
-                        my Mu $target;
-                        &as
-                          ?? -> \val {
-                              my $now := now;
-                              $target = &as(val);
-                              my $index =
-                                @seen.first-index({&with($target,$_[0])});
-                              if $index.defined {
-                                  if $now > @seen[$index][1] {  # expired
-                                      @seen[$index][1] = $now+$expires;
-                                      $res.more(val);
-                                  }
-                              }
-                              else {
-                                  @seen.push: ($target, $now+$expires);
-                                  $res.more(val);
-                              }
-                          }
-                          !! -> \val {
-                              my $now := now;
-                              my $index =
-                                @seen.first-index({&with(val,$_[0])});
-                              if $index.defined {
-                                  if $now > @seen[$index][1] {  # expired
-                                      @seen[$index][1] = $now+$expires;
-                                      $res.more(val);
-                                  }
-                              }
-                              else {
-                                  @seen.push: ($target, $now+$expires);
-                                  $res.more(val);
-                              }
-                          };
-                    }
-                    else {
-                        my $seen := nqp::hash();
-                        my str $target;
-                        &as
-                          ?? -> \val {
-                              my $now := now;
-                              $target = nqp::unbox_s(&as(val).WHICH);
-                              if !nqp::existskey($seen,$target) ||
-                                $now > nqp::atkey($seen,$target) { #expired
-                                  $res.more(val);
-                                  nqp::bindkey($seen,$target,$now+$expires);
-                              }
-                          }
-                          !! -> \val {
-                              my $now := now;
-                              $target = nqp::unbox_s(val.WHICH);
-                              if !nqp::existskey($seen,$target) ||
-                                $now > nqp::atkey($seen,$target) { #expired
-                                  $res.more(val);
-                                  nqp::bindkey($seen,$target,$now+$expires);
-                              }
-                          };
-                    }
-                }
-                else { # !$!expires
-                    if &with and &with !=== &[===] {
-                        my @seen;  # really Mu, but doesn't work in settings
-                        my Mu $target;
-                        &as
-                          ?? -> \val {
-                              $target = &as(val);
-                              if @seen.first({ &with($target,$_) } ) =:= Nil {
-                                  @seen.push($target);
-                                  $res.more(val);
-                              }
-                          }
-                          !! -> \val {
-                              if @seen.first({ &with(val,$_) } ) =:= Nil {
-                                  @seen.push(val);
-                                  $res.more(val);
-                              }
-                          };
-                    }
-                    else {
-                        my $seen := nqp::hash();
-                        my str $target;
-                        &as
-                          ?? -> \val {
-                              $target = nqp::unbox_s(&as(val).WHICH);
-                              unless nqp::existskey($seen, $target) {
-                                  nqp::bindkey($seen, $target, 1);
-                                  $res.more(val);
-                              }
-                          }
-                          !! -> \val {
-                              $target = nqp::unbox_s(val.WHICH);
-                              unless nqp::existskey($seen, $target) {
-                                  nqp::bindkey($seen, $target, 1);
-                                  $res.more(val);
-                              }
-                          };
-                    }
-                }
-            }
-        }
-    }
-
-    method squish(Supply $a, :&as, :&with is copy) {
-        &with //= &[===];
-        on -> $res {
-            $a => do {
-                my Mu $last = @secret;
-                my Mu $target;
-                &as
-                  ?? -> \val {
-                      $target = &as(val);
-                      unless &with($target,$last) {
-                          $last = $target;
-                          $res.more(val);
-                      }
-                  }
-                  !! -> \val {
-                      unless &with(val,$last) {
-                          $last = val;
-                          $res.more(val);
-                      }
-                  };
-            }
-        }
-    }
-    
-    method map(Supply $a, &mapper) {
+    method map(Supply $source, &mapper) {
         my class MapSupply does Supply does PrivatePublishing {
             has $!source;
             has &!mapper;
             
             submethod BUILD(:$!source, :&!mapper) { }
             
+            method live { $source.live }
             method tap(|c) {
                 my $source_tap;
-                my $sub = self.Supply::tap(|c, closing => { $source_tap.close() });
+                my $tap = self.Supply::tap(|c, closing => {$source_tap.close});
                 $source_tap = $!source.tap( -> \val {
                       self!more(&!mapper(val))
                   },
                   done => { self!done(); },
                   quit => -> $ex { self!quit($ex) });
-                $sub
-            }
-        }
-        MapSupply.new(:source($a), :&mapper)
-    }
-
-    method rotor(Supply $s, $elems is copy, $overlap is copy ) {
-
-        $elems   //= 2;
-        $overlap //= 1;
-        return $s if $elems == 1 and $overlap == 0;  # nothing to do
-
-        my class RotorSupply does Supply does PrivatePublishing {
-            has $!source;
-            has $.elems;
-            has $.overlap;
-            
-            submethod BUILD(:$!source, :$!elems, :$!overlap) { }
-            
-            method tap(|c) {
-                my $source_tap;
-                my $tap = self.Supply::tap(|c, closing => { $source_tap.close() });
-
-                my @batched;
-                sub flush {
-                    self!more([@batched]);
-                    @batched.splice( 0, +@batched - $!overlap );
-                }
-
-                $source_tap = $!source.tap( -> \val {
-                      @batched.push: val;
-                      flush if @batched.elems == $!elems;
-                  },
-                  done => {
-                      flush if @batched;
-                      self!done();
-                  },
-                  quit => -> $ex { self!quit($ex) });
                 $tap
             }
         }
-        RotorSupply.new(:source($s), :$elems, :$overlap)
+        MapSupply.new(:$source, :&mapper)
     }
 
-    method batch(Supply $s, :$elems, :$seconds ) {
-
-        return $s if (!$elems or $elems == 1) and !$seconds;  # nothing to do
-
-        my class BatchSupply does Supply does PrivatePublishing {
-            has $!source;
-            has $.elems;
-            has $.seconds;
-            
-            submethod BUILD(:$!source, :$!elems, :$!seconds) { }
-            
-            method tap(|c) {
-                my $source_tap;
-                my $tap = self.Supply::tap(|c, closing => { $source_tap.close() });
-
-                my @batched;
-                my $last_time;
-                sub flush {
-                    self!more([@batched]);
-                    @batched = ();
-                }
-
-                my &more = do {
-                    if $!seconds {
-                        $last_time = time div $!seconds;
-
-                        $!elems # and $!seconds
-                          ??  -> \val {
-                              my $this_time = time div $!seconds;
-                              if $this_time != $last_time {
-                                  flush if @batched;
-                                  $last_time = $this_time;
-                                  @batched.push: val;
-                              }
-                              else {
-                                  @batched.push: val;
-                                  flush if @batched.elems == $!elems;
-                              }
-                          }
-                          !! -> \val {
-                              my $this_time = time div $!seconds;
-                              if $this_time != $last_time {
-                                  flush if @batched;
-                                  $last_time = $this_time;
-                              }
-                              @batched.push: val;
-                          }
-                    }
-                    else { # just $!elems
-                        -> \val {
-                            @batched.push: val;
-                            if @batched.elems == $!elems {
-                                flush;
-                            }
-                        }
-                    }
-                }
-                $source_tap = $!source.tap( &more,
-                  done => {
-                      flush if @batched;
-                      self!done();
-                  },
-                  quit => -> $ex { self!quit($ex) });
-                $tap
-            }
-        }
-        BatchSupply.new(:source($s), :$elems, :$seconds)
-    }
-
-    method schedule_on(Supply $s, Scheduler $scheduler) {
+    method schedule_on(Supply $source, Scheduler $scheduler) {
         my class ScheduleSupply does Supply does PrivatePublishing {
             has $!source;
             has $!scheduler;
             
             submethod BUILD(:$!source, :$!scheduler) { }
             
+            method live { $source.live }
             method tap(|c) {
                 my $source_tap;
-                my $sub = self.Supply::tap(|c, closing => { $source_tap.close() });
+                my $tap = self.Supply::tap(|c, closing => {$source_tap.close});
                 $source_tap = $!source.tap( -> \val {
                       $!scheduler.cue: { self!more(val) }
                   },
                   done => { $!scheduler.cue: { self!done(); } },
                   quit => -> $ex { $!scheduler.cue: { self!quit($ex) } });
-                $sub
+                $tap
             }
         }
-        ScheduleSupply.new(:source($s), :$scheduler)
+        ScheduleSupply.new(:$source, :$scheduler)
     }
     
     method start(Supply $s, &startee) {
@@ -415,6 +176,7 @@ my class SupplyOperations is repr('Uninstantiable') {
             
             submethod BUILD(:$!value, :&!startee) { }
             
+            method live { $s.live }
             method tap(|c) {
                 my $sub = self.Supply::tap(|c);
                 Promise.start({ &!startee($!value) }).then({
@@ -434,8 +196,11 @@ my class SupplyOperations is repr('Uninstantiable') {
         })
     }
 
-    method unchanged(Supply $s, $time, :$scheduler = $*SCHEDULER) {
-        my class UnchangedSupply does Supply does PrivatePublishing {
+    method stable(Supply $source, $time, :$scheduler = $*SCHEDULER) {
+
+        return $source if !$time;  # nothing to do
+
+        my class StableSupply does Supply does PrivatePublishing {
             has $!source;
             has $!time;
             has $!scheduler;
@@ -446,9 +211,10 @@ my class SupplyOperations is repr('Uninstantiable') {
                 $!lock = Lock.new;
             }
             
+            method live { $source.live }
             method tap(|c) {
                 my $source_tap;
-                my $sub = self.Supply::tap(|c, closing => { $source_tap.close() });
+                my $tap = self.Supply::tap(|c, closing => {$source_tap.close});
                 $source_tap = $!source.tap(
                     -> \val {
                         $!lock.protect({
@@ -467,13 +233,44 @@ my class SupplyOperations is repr('Uninstantiable') {
                     },
                     done => { self!done(); },
                     quit => -> $ex { self!quit($ex) });
-                $sub
+                $tap
             }
         }
-        UnchangedSupply.new(:source($s), :$time, :$scheduler);
+        StableSupply.new(:$source, :$time, :$scheduler);
     }
 
-    method migrate(Supply $s) {
+    method delay(Supply $source, $time, :$scheduler = $*SCHEDULER) {
+
+        return $source if !$time;  # nothing to do
+
+        my class DelaySupply does Supply does PrivatePublishing {
+            has $!source;
+            has $!time;
+            has $!scheduler;
+            
+            submethod BUILD(:$!source, :$!time, :$!scheduler) { }
+            
+            method live { $source.live }
+            method tap(|c) {
+                my $source_tap;
+                my $tap = self.Supply::tap(|c, closing => {$source_tap.close});
+                $source_tap = $!source.tap(
+                    -> \val {
+                        $!scheduler.cue( { self!more(val) }, :in($time) );
+                    },
+                    done => {
+                        $!scheduler.cue( { self!done }, :in($time) );
+                    },
+                    quit => -> $ex {
+                        $!scheduler.cue( { self!quit($ex) }, :in($time) );
+                    } );
+                $tap
+            }
+        }
+        DelaySupply.new(:$source, :$time, :$scheduler);
+    }
+
+    method migrate(Supply $source) {
         my class MigrateSupply does Supply does PrivatePublishing {
             has $!source;
             has $!current;
@@ -483,9 +280,10 @@ my class SupplyOperations is repr('Uninstantiable') {
                 $!lock = Lock.new;
             }
             
+            method live { $source.live }
             method tap(|c) {
                 my $source_tap;
-                my $sub = self.Supply::tap(|c, closing => { $source_tap.close() });
+                my $tap = self.Supply::tap(|c, closing => {$source_tap.close});
                 $source_tap = $!source.tap(
                     -> \inner_supply {
                         $!lock.protect({
@@ -497,42 +295,9 @@ my class SupplyOperations is repr('Uninstantiable') {
                     },
                     done => { self!done(); },
                     quit => -> $ex { self!quit($ex) });
-                $sub
+                $tap
             }
         }
-        MigrateSupply.new(:source($s))
-    }
-
-    method merge(*@s) {
-
-        @s.shift unless @s[0].DEFINITE;  # lose if used as class method
-        return Supply unless +@s;        # nothing to be done
-        return @s[0]  if +@s == 1;       # nothing to be done
-
-        my $dones = 0;
-        on -> $res {
-            @s => {
-                more => -> \val { $res.more(val) },
-                done => { $res.done() if ++$dones == +@s }
-            },
-        }
-    }
-    
-    method zip(*@s, :&with is copy) {
-
-        @s.shift unless @s[0].DEFINITE;  # lose if used as class method
-        return Supply unless +@s;        # nothing to be done
-        return @s[0]  if +@s == 1;       # nothing to be done
-
-        my &infix:<op> = &with // &[,]; # hack for [[&with]] parse failure
-        my @values = ( [] xx +@s );
-        on -> $res {
-            @s => -> $val, $index {
-                @values[$index].push($val);
-                if all(@values) {
-                    $res.more( [op] @values>>.shift );
-                }
-            }
-        }
+        MigrateSupply.new(:$source)
     }
 }

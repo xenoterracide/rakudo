@@ -130,7 +130,7 @@ my class Any { # declared in BOOTSTRAP
     }
     method grep-index(Mu $test) {
         my $index = -1;
-        self.map: { $index++; $index if $_ ~~ $test };
+        self.map: { $index++; +$index if $_ ~~ $test };
     }
     method first(Mu $test) is rw {
         self.map({ return $_ if $_ ~~ $test });
@@ -285,6 +285,8 @@ my class Any { # declared in BOOTSTRAP
 
     method KeySet() { DEPRECATED("'SetHash'"); self.SetHash }
     method KeyBag() { DEPRECATED("'BagHash'"); self.BagHash }
+
+    method Supply() { self.list.Supply }
 }
 Metamodel::ClassHOW.exclude_parent(Any);
 
