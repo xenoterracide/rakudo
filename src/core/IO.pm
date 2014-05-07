@@ -67,7 +67,7 @@ my role IO::FileTestable does IO {
     }
 
     method z() {
-        self.e && self.s == 0;
+        self.f && self.s == 0;
     }
 
     method modified() {
@@ -545,8 +545,8 @@ my class IO::Path is Cool does IO::FileTestable {
         my int $elems = nqp::elems($RSA);
         gather loop (my int $i = 0; $i < $elems; $i = $i + 1) {
             my Str $file := nqp::p6box_s(pir::trans_encoding__Ssi(
-			nqp::atpos_s($RSA, $i),
-			pir::find_encoding__Is('utf8')));
+              nqp::atpos_s($RSA, $i),
+              pir::find_encoding__Is('utf8')));
             if $file ~~ $test {
                 take self.child($file);
             }
@@ -741,7 +741,7 @@ multi sub cwd() {
 proto sub chdir(|) { * }
 multi sub chdir(IO::Path:D $path) { chdir $path.Str }
 multi sub chdir($path as Str) {
-    my $newpath = IO::Path.new($path);
+    my $newpath = IO::Path.new(IO::Spec.canonpath($path));
     if $newpath.is-relative {
         my $tmp = $*CWD;
         for IO::Spec.splitdir($newpath) -> $segment {

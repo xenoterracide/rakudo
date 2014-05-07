@@ -12,22 +12,29 @@ my class Tap {
     has &.closing;
     has $.supply;
 
-    method close { $!supply.close(self) }
+    method close (Tap:D:) { $!supply.close(self) }
 }
 
 my role Supply {
-    has @!tappers;
     has $!tappers_lock = Lock.new;
+    has @!tappers;
+    has $!been_tapped;
+    has @!paused;
 
-    method tap(&more = -> $ { }, :&done, :&quit = {die $_}, :&closing) {
-        my $sub = Tap.new(:&more, :&done, :&quit, :&closing, :supply(self));
+    method tap(Supply:D: &more = -> $ { }, :&done,:&quit={die $_},:&closing) {
+        my $tap = Tap.new(:&more, :&done, :&quit, :&closing, :supply(self));
         $!tappers_lock.protect({
-            @!tappers.push($sub);
+            @!tappers.push($tap);
+            if @!paused -> \todo {
+                $tap.more($_) for todo;
+                @!paused = ();
+            }
+            $!been_tapped = True;
         });
-        $sub
+        $tap
     }
 
-    method close(Tap $t) {
+    method close(Supply:D: Tap $t) {
         my $found;
         $!tappers_lock.protect({
             @!tappers .= grep( { $_ === $t ?? !($found = True) !! True } );
@@ -38,21 +45,24 @@ my role Supply {
         $found // False;
     }
 
-    method tappers() {
+    method tappers(Supply:D:) {
         # Shallow clone to provide safe snapshot.
         my @tappers;
         $!tappers_lock.protect({ @tappers = @!tappers });
         @tappers
     }
 
-    method more(\msg) {
-        for self.tappers -> $t {
-            $t.more().(msg)
+    method more(Supply:D: \msg) {
+        if self.tappers -> \tappers {
+            .more().(msg) for tappers;
+        }
+        elsif !$!been_tapped {
+            $!tappers_lock.protect({ @!paused.push: msg });
         }
         Nil;
     }
 
-    method done() {
+    method done(Supply:D:) {
         for self.tappers -> $t {
             my $l = $t.done();
             $l() if $l;
@@ -60,7 +70,7 @@ my role Supply {
         Nil;
     }
 
-    method quit($ex) {
+    method quit(Supply:D: $ex) {
         for self.tappers -> $t {
             my $f = $t.quit();
             $f($ex) if $f;
@@ -68,10 +78,10 @@ my role Supply {
         Nil;
     }
 
-    method live { True };
+    method live(Supply:D:) { True };
 
-    method Supply() { self }
-    method Channel() {
+    method Supply(Supply:) { self }
+    method Channel(Supply:D:) {
         my $c = Channel.new();
         self.tap( -> \val { $c.send(val) },
           done => { $c.close },
@@ -79,7 +89,7 @@ my role Supply {
         $c
     }
 
-    method Promise() {
+    method Promise(Supply:D:) {
         my $l = Lock.new;
         my $p = Promise.new;
         my $v = $p.vow;
@@ -105,7 +115,7 @@ my role Supply {
         $p
     }
 
-    method wait() {
+    method wait(Supply:D:) {
         my $l = Lock.new;
         my $p = Promise.new;
         my $t = self.tap( -> \val {},
@@ -129,7 +139,7 @@ my role Supply {
         $p.result
     }
 
-    method list() {
+    method list(Supply:D:) {
         # Use a Channel to handle any asynchrony.
         my $c = self.Channel;
         map sub ($) {
@@ -140,34 +150,34 @@ my role Supply {
         }, *;
     }
 
-    method for(|c)             { SupplyOperations.for(|c) }
-    method interval(|c)        { SupplyOperations.interval(|c) }
-    method flat()              { SupplyOperations.flat(self) }
-    method grep(&filter)       { SupplyOperations.grep(self, &filter) }
-    method map(&mapper)        { SupplyOperations.map(self, &mapper) }
-    method schedule_on(Scheduler $scheduler) {
+    method for(Supply:U: |c)             { SupplyOperations.for(|c) }
+    method interval(Supply:U: |c)        { SupplyOperations.interval(|c) }
+    method flat(Supply:D: )              { SupplyOperations.flat(self) }
+    method grep(Supply:D: &filter)       { SupplyOperations.grep(self, &filter) }
+    method map(Supply:D: &mapper)        { SupplyOperations.map(self, &mapper) }
+    method schedule_on(Supply:D: Scheduler $scheduler) {
         SupplyOperations.schedule_on(self, $scheduler);
     }
-    method start(&startee)     { SupplyOperations.start(self, &startee) }
-    method stable($time, :$scheduler = $*SCHEDULER) {
+    method start(Supply:D: &startee)     { SupplyOperations.start(self, &startee) }
+    method stable(Supply:D: $time, :$scheduler = $*SCHEDULER) {
         SupplyOperations.stable(self, $time, :$scheduler)
     }
-    method delay($time, :$scheduler = $*SCHEDULER) {
+    method delay(Supply:D: $time, :$scheduler = $*SCHEDULER) {
         SupplyOperations.delay(self, $time, :$scheduler)
     }
-    method migrate()           { SupplyOperations.migrate(self) }
+    method migrate(Supply:D: )           { SupplyOperations.migrate(self) }
 
-    method act(&actor) {
+    method act(Supply:D: &actor) {
         self.do(&actor).tap(|%_) # need "do" for serializing callbacks
     }
 
-    method do(Supply $self: &side_effect) {
+    method do(Supply:D $self: &side_effect) {
         on -> $res {
             $self => -> \val { side_effect(val); $res.more(val) }
         }
     }
 
-    method uniq(Supply $self: :&as, :&with, :$expires) {
+    method uniq(Supply:D $self: :&as, :&with, :$expires) {
         on -> $res {
             $self => do {
                 if $expires {
@@ -274,7 +284,7 @@ my role Supply {
         }
     }
 
-    method squish(Supply $self: :&as, :&with is copy) {
+    method squish(Supply:D $self: :&as, :&with is copy) {
         &with //= &[===];
         on -> $res {
             my @secret;
@@ -299,7 +309,7 @@ my role Supply {
         }
     }
 
-    method rotor(Supply $self: $elems? is copy, $overlap? is copy ) {
+    method rotor(Supply:D $self: $elems? is copy, $overlap? is copy ) {
 
         $elems   //= 2;
         $overlap //= 1;
@@ -327,7 +337,7 @@ my role Supply {
         }
     }
 
-    method batch(Supply $self: :$elems, :$seconds ) {
+    method batch(Supply:D $self: :$elems, :$seconds ) {
 
         return $self if (!$elems or $elems == 1) and !$seconds;  # nothing to do
 
@@ -383,6 +393,156 @@ my role Supply {
         }
     }
 
+    method elems(Supply:D $self: $seconds? ) {
+
+        on -> $res {
+            $self => do {
+                my $elems = 0;
+                my $last_time;
+                my $last_elems;
+
+                {
+                    more => do {
+                        if $seconds {
+                            $last_time  = time div $seconds;
+                            $last_elems = $elems;
+                            -> \val {
+                                  $last_elems = ++$elems;
+                                  my $this_time = time div $seconds;
+                                  if $this_time != $last_time {
+                                      $res.more($elems);
+                                      $last_time = $this_time;
+                                  }
+                            }
+                        }
+                        else {
+                            -> \val { $res.more(++$elems) }
+                        }
+                    },
+                    done => {
+                        $res.more($elems) if $seconds and $elems != $last_elems;
+                        $res.done;
+                    }
+                }
+            }
+        }
+    }
+
+    method last(Supply:D $self: Int $number = 1) {  # should be Natural
+        on -> $res {
+            $self => do {
+                my @seen;
+                {
+                    more => $number == 1
+                      ?? -> \val { @seen[0] = val }
+                      !! -> \val {
+                          @seen.shift if +@seen == $number;
+                          @seen.push: val;
+                      },
+                    done => {
+                        $res.more($_) for @seen;
+                        $res.done;
+                    }
+                }
+            }
+        }
+    }
+
+    method min(Supply:D $self: &by = &infix:<cmp>) {
+        my &cmp = &by.arity == 2 ?? &by !! { by($^a) cmp by($^b) }
+        on -> $res {
+            $self => do {
+                my $min;
+                {
+                    more => -> \val {
+                        if val.defined and !$min.defined || cmp(val,$min) < 0 {
+                            $res.more( $min = val );
+                        }
+                    },
+                    done => { $res.done }
+                }
+            }
+        }
+    }
+
+    method max(Supply:D $self: &by = &infix:<cmp>) {
+        my &cmp = &by.arity == 2 ?? &by !! { by($^a) cmp by($^b) }
+        on -> $res {
+            $self => do {
+                my $max;
+                {
+                    more => -> \val {
+                        if val.defined and !$max.defined || cmp(val,$max) > 0 {
+                            $res.more( $max = val );
+                        }
+                    },
+                    done => { $res.done }
+                }
+            }
+        }
+    }
+
+    method minmax(Supply:D $self: &by = &infix:<cmp>) {
+        my &cmp = &by.arity == 2 ?? &by !! { by($^a) cmp by($^b) }
+        on -> $res {
+            $self => do {
+                my $min;
+                my $max;
+                {
+                    more => -> \val {
+                        if val.defined {
+                            if !$min.defined {
+                                $res.more( Range.new($min = val, $max = val) );
+                            }
+                            elsif cmp(val,$min) < 0 {
+                                $res.more( Range.new( $min = val, $max ) );
+                            }
+                            elsif cmp(val,$max) > 0 {
+                                $res.more( Range.new( $min, $max = val ) );
+                            }
+                        }
+                    },
+                    done => { $res.done }
+                }
+            }
+        }
+    }
+
+    method reduce(Supply:D $self: &with) {
+        on -> $res {
+            $self => do {
+                my $notfirst;
+                my $reduced;
+                {
+                    more => -> \val {
+                        $reduced = $notfirst ?? with($reduced,val) !! val;
+                        $res.more($reduced);
+                        once $notfirst = True;
+                    },
+                    done => { $res.done }
+                }
+            }
+        }
+    }
+
+    method grab(Supply:D $self: &when_done) {
+        on -> $res {
+            $self => do {
+                my @seen;
+                {
+                    more => -> \val { @seen.push: val },
+                    done => {
+                        $res.more($_) for when_done(@seen);
+                        $res.done;
+                    }
+                }
+            }
+        }
+    }
+
+    method reverse(Supply:D:)                 { self.grab( {.reverse} ) }
+    method sort(Supply:D: &by = &infix:<cmp>) { self.grab( {.sort(&by)} ) }
+
     method merge(*@s) {
 
         @s.unshift(self) if self.DEFINITE;  # add if instance method
@@ -434,12 +594,14 @@ my class X::Supply::On::NoMore is Exception {
 sub on(&setup) {
     my class OnSupply does Supply {
         has &!setup;
+        has Bool $!live = False;
         
         submethod BUILD(:&!setup) { }
 
         method !add_source(
           $source, $lock, $index, :&more, :&done is copy, :&quit is copy
         ) {
+            $!live ||= True if $source.live;
             &more // X::Supply::On::NoMore.new.throw;
             &done //= { self.done };
             &quit //= -> $ex { self.quit($ex) };
@@ -477,7 +639,7 @@ sub on(&setup) {
             $source.tap( &tap_more, done => &tap_done, quit => &tap_quit );
         }
         
-        method live { False }
+        method live { $!live }
         method tap(|c) {
             my @to_close;
             my $sub = self.Supply::tap( |c, closing => {.close for @to_close});
