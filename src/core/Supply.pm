@@ -26,7 +26,7 @@ my role Supply {
         $!tappers_lock.protect({
             @!tappers.push($tap);
             if @!paused -> \todo {
-                $tap.more($_) for todo;
+                $tap.more().($_) for todo;
                 @!paused = ();
             }
             $!been_tapped = True;
@@ -166,6 +166,28 @@ my role Supply {
         SupplyOperations.delay(self, $time, :$scheduler)
     }
     method migrate(Supply:D: )           { SupplyOperations.migrate(self) }
+
+    proto method classify (|) { * }
+    multi method classify(Supply:D: &mapper )  {
+        SupplyOperations.classify(self, &mapper);
+    }
+    multi method classify(Supply:D: %mapper )  {
+        SupplyOperations.classify(self, { %mapper{$^a} });
+    }
+    multi method classify(Supply:D: @mapper )  {
+        SupplyOperations.classify(self, { @mapper[$^a] });
+    }
+
+    proto method categorize (|) { * }
+    multi method categorize(Supply:D: &mapper )  {
+        SupplyOperations.classify(self, &mapper, :multi);
+    }
+    multi method categorize(Supply:D: %mapper )  {
+        SupplyOperations.classify(self, { %mapper{$^a} }, :multi);
+    }
+    multi method categorize(Supply:D: @mapper )  {
+        SupplyOperations.classify(self, { @mapper[$^a] }, :multi);
+    }
 
     method act(Supply:D: &actor) {
         self.do(&actor).tap(|%_) # need "do" for serializing callbacks
