@@ -92,7 +92,7 @@ my class Any { # declared in BOOTSTRAP
     }
     proto method map (|) { * }
     multi method map(Whatever) is rw { self }
-    multi method map($block) is rw {
+    multi method map($block, :$label) is rw {
         MapIter.new(self, $block, Bool::True, :$label).list
     }
     method flatmap($block) is rw { flatmap($block, self) }
