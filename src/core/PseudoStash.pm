@@ -38,43 +38,34 @@ my class Label {
     }
     method next() {
         my Mu $ex := nqp::newexception();
-        nqp::setpayload($ex, self);
-#?if moar
-        nqp::setextype($ex, nqp::const::CONTROL_NEXT + nqp::const::CONTROL_LABELED);
-#?endif
+        nqp::setpayload($ex, nqp::decont(self));
 #?if parrot
         nqp::setextype($ex, 512); # XXX create nqp::const::CONTROL_LOOP_NEXT_LABELED?
 #?endif
-#?if jvm
-        nqp::die("loop labels on JVM NYI");
+#?if !parrot
+        nqp::setextype($ex, nqp::const::CONTROL_NEXT + nqp::const::CONTROL_LABELED);
 #?endif
         nqp::throw($ex);
     }
     method redo() {
         my Mu $ex := nqp::newexception();
-        nqp::setpayload($ex, self);
-#?if moar
-        nqp::setextype($ex, nqp::const::CONTROL_REDO + nqp::const::CONTROL_LABELED);
-#?endif
+        nqp::setpayload($ex, nqp::decont(self));
 #?if parrot
         nqp::setextype($ex, 513); # XXX create nqp::const::CONTROL_LOOP_REDO_LABELED?
 #?endif
-#?if jvm
-        nqp::die("loop labels on JVM NYI");
+#?if !parrot
+        nqp::setextype($ex, nqp::const::CONTROL_REDO + nqp::const::CONTROL_LABELED);
 #?endif
         nqp::throw($ex);
     }
     method last() {
         my Mu $ex := nqp::newexception();
-        nqp::setpayload($ex, self);
-#?if moar
-        nqp::setextype($ex, nqp::const::CONTROL_LAST + nqp::const::CONTROL_LABELED);
-#?endif
+        nqp::setpayload($ex, nqp::decont(self));
 #?if parrot
         nqp::setextype($ex, 514); # XXX create nqp::const::CONTROL_LOOP_LAST_LABELED?
 #?endif
-#?if jvm
-        nqp::die("loop labels on JVM NYI");
+#?if !parrot
+        nqp::setextype($ex, nqp::const::CONTROL_LAST + nqp::const::CONTROL_LABELED);
 #?endif
         nqp::throw($ex);
     }
