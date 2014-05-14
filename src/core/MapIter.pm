@@ -154,7 +154,7 @@ my class MapIter is Iterator {
                             $state = 1
                         ))
                     ),
-                    'LABELED', $label,
+                    'LABELED', nqp::decont($label),
                     'LAST', nqp::stmts(
                         ($!items := Any),
                         ($!listiter := Any),
@@ -212,7 +212,7 @@ my class MapIter is Iterator {
                             ($state = 1)
                         ))
                     ),
-                    'LABELED', $label,
+                    'LABELED', nqp::decont($label),
                     'LAST', nqp::stmts(
                         ($!items := Any),
                         ($!listiter := Any),
