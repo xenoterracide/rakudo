@@ -51,6 +51,7 @@ my class MapIter is Iterator {
             my int $NEXT = nqp::can($block, 'fire_phasers') 
                              && +$block.phasers('NEXT');
             my int $is_sink = $sink ?? 1 !! 0;
+            my Mu $label := $!label;
 
 #?if parrot
             Q:PIR {
@@ -71,7 +72,16 @@ my class MapIter is Iterator {
                 is_sink  = find_lex '$is_sink'
 
                 set_addr handler, catch
-                handler.'handle_types'(.CONTROL_LOOP_LAST, .CONTROL_LOOP_NEXT, .CONTROL_LOOP_REDO)
+            };
+            if $!label {
+                Q:PIR { handler.'handle_types'(.CONTROL_LOOP_LAST, .CONTROL_LOOP_NEXT, .CONTROL_LOOP_REDO, 512, 513, 514) };
+                1
+            }
+            else {
+                Q:PIR { handler.'handle_types'(.CONTROL_LOOP_LAST, .CONTROL_LOOP_NEXT, .CONTROL_LOOP_REDO) };
+                1
+            }
+            Q:PIR {
                 push_eh handler
 
               iter_loop:
@@ -111,6 +121,24 @@ my class MapIter is Iterator {
                 type = getattribute exception, 'type'
                 if type == .CONTROL_LOOP_REDO goto redo
                 if type == .CONTROL_LOOP_LAST goto last
+            };
+            if $!label {
+                Q:PIR {
+                    .local int id1_reg, id2_reg
+                    .local pmc label
+                    label = find_lex '$label'
+                    id1_reg = get_id result
+                    id2_reg = label
+                    if id1_reg != id2_reg goto rethrow
+                    if type == 512 goto next
+                    if type == 513 goto redo
+                    if type == 514 goto last
+                  rethrow:
+                    rethrow exception # XXX Should that be perl6_based_rethrow?
+                };
+                1
+            }
+            Q:PIR {
               next:
                 unless NEXT goto iter_loop
                 block.'fire_phasers'('NEXT')
@@ -127,7 +155,6 @@ my class MapIter is Iterator {
             my int $state = 1;
             my int $itmp;
             my Mu $items := $!items;
-            my Mu $label := $!label;
             my Mu $args := nqp::list();
             my Mu $arg;
             

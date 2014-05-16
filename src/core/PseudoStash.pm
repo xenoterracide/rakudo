@@ -36,6 +36,7 @@ my class Label {
 
         "Label<$!name>(at $file:$line, '$green$left$yellow$eject$red$!name: $green$right$clear')"
     }
+    method Int() { nqp::where(nqp::decont(self)) }
     method next() {
         my Mu $ex := nqp::newexception();
         nqp::setpayload($ex, nqp::decont(self));
