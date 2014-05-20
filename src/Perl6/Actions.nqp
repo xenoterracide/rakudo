@@ -1213,7 +1213,10 @@ class Perl6::Actions is HLL::Actions does STDActions {
 
     method statement_control:sym<use>($/) {
         my $past := QAST::WVal.new( :value($*W.find_symbol(['Nil'])) );
-        if $<version> {
+        if $<statementlist> {
+            $past := $<statementlist>.ast;
+        }
+        elsif $<version> {
             # TODO: replace this by code that doesn't always die with
             # a useless error message
 #            my $i := -1;
@@ -3250,7 +3253,7 @@ class Perl6::Actions is HLL::Actions does STDActions {
 
         # Do the various tasks to turn the block into a method code object.
         my $inv_type  := $*W.find_symbol([ # XXX Maybe Cursor below, not Mu...
-            $name && $*W.is_lexical('$?CLASS') ?? '$?CLASS' !! 'Mu']);
+            $name && $*SCOPE ne 'my' && $*W.is_lexical('$?CLASS') ?? '$?CLASS' !! 'Mu']);
         methodize_block($/, $code, $past, %sig_info, $inv_type);
 
         # Need to put self into a register for the regex engine.
