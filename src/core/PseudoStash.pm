@@ -3,40 +3,39 @@ my class X::Caller::NotDynamic { ... }
 
 my class Label {
     has Str $!name;
-    has Mu $!match;
-    method new(:$name, Mu :$match) {
-        # XXX register in &?BLOCK.labels
+    has Str $!file;
+    has Int $!line;
+    has Str $!prematch;
+    has Str $!postmatch;
+    method new(:$name, :$line, :$prematch, :$postmatch) {
+        # XXX Register in &?BLOCK.labels when we have &?BLOCK.
         my $obj := nqp::create(self);
-        nqp::bindattr($obj, Label, '$!name',  $name);
-        nqp::bindattr($obj, Label, '$!match', $match);
+        nqp::bindattr($obj, Label, '$!name',      $name);
+        nqp::bindattr($obj, Label, '$!file',      nqp::p6box_s(nqp::getlexdyn('$?FILES')));
+        nqp::bindattr($obj, Label, '$!line',      $line);
+        nqp::bindattr($obj, Label, '$!prematch',  nqp::p6box_s($prematch));
+        nqp::bindattr($obj, Label, '$!postmatch', nqp::p6box_s($postmatch));
         $obj
     }
     method name() {
         $!name
     }
-    method match() {
-        $!match
-    }
-    # XXX method leave(@args)
-    # XXX method goto
-    method gist() {
-        my $file  = nqp::getlexdyn('$?FILES');
-        $file     = nqp::box_s((nqp::isnull($file) ?? '<unknown file>' !! $file), Str);
-        my $line  = HLL::Compiler.lineof($!match.orig, $!match.from);
-        my $left  = nqp::substr($!match.orig, 0, $!match.from);
-        my $right = nqp::substr($!match.orig, $!match.to, $!match.orig.chars - $!match.to);
-        $left     = $left.match(/   \N ** 0..20 $/).Str.trim-leading;
-        $right    = $right.match(/^ \N ** 0..20  /).Str.trim-trailing;
 
+    # XXX method leave(@args)
+
+    method gist() {
         my $color = %*ENV<RAKUDO_ERROR_COLOR> // $*OS ne 'MSWin32';
         my ($red, $green, $yellow, $clear) = $color
             ?? ("\e[31m", "\e[32m", "\e[33m", "\e[0m")
             !! ("", "", "", "");
         my $eject = $*OS eq 'MSWin32' ?? "<HERE>" !! "\x[23CF]";
 
-        "Label<$!name>(at $file:$line, '$green$left$yellow$eject$red$!name: $green$right$clear')"
+        "Label<$!name>(at $!file:$!line, '$green$!prematch$yellow$eject$red$!name$green$!postmatch$clear')"
     }
+
     method Int() { nqp::where(nqp::decont(self)) }
+
+    # XXX method goto
     method next() {
         my Mu $ex := nqp::newexception();
         nqp::setpayload($ex, nqp::decont(self));
