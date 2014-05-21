@@ -283,7 +283,7 @@ my class MapIter is Iterator {
 #?endif
 
             if $!items || $!listiter {
-                my $nextiter := nqp::create(self).BUILD($!listiter, $!block, $!flattens);
+                my $nextiter := nqp::create(self).BUILD($!listiter, $!block, $!flattens, :$!label);
                 nqp::bindattr($nextiter, MapIter, '$!items', $!items);
                 nqp::push($rpa, $nextiter);
             }
