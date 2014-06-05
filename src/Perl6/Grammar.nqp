@@ -1431,10 +1431,28 @@ grammar Perl6::Grammar is HLL::Grammar does STD {
                 }
             ]
         ]
-        [ <?{ $*MAIN ne $OLD_MAIN }> <statementlist=.LANG($*MAIN, 'statementlist', 1)> || <?> ]
+        [ <?{ $*MAIN ne $OLD_MAIN }> <statementlist=.LANG2($*MAIN, 'statementlist', 1)> || <?> ]
         <.ws>
     }
-    
+
+    method LANG2($lang, $regex, *@args) {
+        say(1439);
+        # , :shared(self.'!shared'())
+        # , :shared($*W.find_symbol(['Cursor']))
+        my $lang_cursor := %*LANG{$lang}.'!cursor_init'(self.orig(), :p(self.pos()));
+        say(1443);
+        if self.HOW.traced(self) {
+            $lang_cursor.HOW.trace-on($lang_cursor, self.HOW.trace_depth(self));
+        }
+        say(1447);
+        my $*ACTIONS    := %*LANG{$lang ~ '-actions'};
+        say(1449);
+        say($lang_cursor.HOW.name($lang_cursor));
+        my $ret := $lang_cursor."$regex"(|@args);
+        say(1452);
+        $ret;
+    }
+
     sub do_import($/, $module, $package_source_name, $arglist?) {
         if nqp::existskey($module, 'EXPORT') {
             my $EXPORT := $*W.stash_hash($module<EXPORT>);
