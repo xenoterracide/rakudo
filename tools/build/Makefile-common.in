@@ -17,6 +17,7 @@ BOOTSTRAP_SOURCES = \
 
 COMMON_BOOTSTRAP_SOURCES = \
   src/Perl6/Metamodel/Archetypes.nqp \
+  src/Perl6/Metamodel/Annotated.nqp \
   src/Perl6/Metamodel/Naming.nqp \
   src/Perl6/Metamodel/Documenting.nqp \
   src/Perl6/Metamodel/Stashing.nqp \

@@ -1,4 +1,5 @@
 class Perl6::Metamodel::ClassHOW
+    does Perl6::Metamodel::Annotated
     does Perl6::Metamodel::Naming
     does Perl6::Metamodel::Documenting
     does Perl6::Metamodel::Versioning

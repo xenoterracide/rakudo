@@ -80,6 +80,7 @@ OPS_SOURCE   = perl6.ops
 
 P_METAMODEL_SOURCES = \
   src/Perl6/Metamodel/Archetypes.nqp \
+  src/Perl6/Metamodel/Annotated.nqp \
   src/Perl6/Metamodel/Naming.nqp \
   src/Perl6/Metamodel/Documenting.nqp \
   src/Perl6/Metamodel/Stashing.nqp \
